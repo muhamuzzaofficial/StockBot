@@ -49,8 +49,18 @@ logger = logging.getLogger(__name__)
 # ----------------- LOW-MEMORY PLAYWRIGHT ENGINE -----------------
 
 async def fetch_musaffa_compliance(ticker: str) -> dict:
-    clean_ticker = ticker.strip().upper().replace(".NS", "").replace(".BO", "")
-    direct_url = f"https://musaffa.com/stock/{clean_ticker}.NS/"
+    clean_ticker = ticker.strip().upper()
+
+    # Determine URL candidate list:
+    # If the user enters an Indian stock like "TCS", Musaffa uses "TCS.NS".
+    # If the user enters a US stock like "NVDA", Musaffa uses "NVDA/".
+    candidates = []
+    if clean_ticker.endswith(".NS") or clean_ticker.endswith(".BO"):
+        candidates.append(f"https://musaffa.com/stock/{clean_ticker}/")
+    else:
+        # Check both: US bare ticker first, then Indian .NS ticker
+        candidates.append(f"https://musaffa.com/stock/{clean_ticker}/")
+        candidates.append(f"https://musaffa.com/stock/{clean_ticker}.NS/")
 
     if not os.path.exists(STATE_FILE):
         return {
@@ -60,7 +70,6 @@ async def fetch_musaffa_compliance(ticker: str) -> dict:
         }
 
     async with async_playwright() as p:
-        # Aggressive memory-saving flags to fit strictly under Render's 512 MB ceiling
         browser = await p.chromium.launch(
             headless=True,
             args=[
@@ -70,12 +79,6 @@ async def fetch_musaffa_compliance(ticker: str) -> dict:
                 "--disable-gpu",
                 "--no-zygote",
                 "--single-process",
-                "--disable-accelerated-2d-canvas",
-                "--no-first-run",
-                "--mute-audio",
-                "--disable-background-networking",
-                "--disable-default-apps",
-                "--disable-sync",
             ],
         )
 
@@ -91,7 +94,7 @@ async def fetch_musaffa_compliance(ticker: str) -> dict:
             )
             page = await context.new_page()
 
-            # Abort heavy assets (images, fonts, stylesheets, media) to keep memory near ~180 MB
+            # Abort heavy assets to keep RAM low
             async def block_heavy_assets(route):
                 if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
                     await route.abort()
@@ -100,28 +103,37 @@ async def fetch_musaffa_compliance(ticker: str) -> dict:
 
             await page.route("**/*", block_heavy_assets)
 
-            logger.info(f"Checking direct URL: {direct_url}")
-            await page.goto(direct_url, wait_until="domcontentloaded", timeout=25000)
-            await page.wait_for_timeout(3500)
-
-            body_text = await page.inner_text("body")
-            lower_body = body_text.lower()
-
             status = "UNKNOWN"
             details = "Could not parse compliance verdict."
 
-            if "classified as halal" in lower_body or "is halal" in lower_body:
-                status = "HALAL"
-                details = "Passed Shariah business activities and AAOIFI financial ratio screens."
-            elif "classified as not halal" in lower_body or "not shariah-compliant" in lower_body:
-                status = "NOT HALAL"
-                details = "Breached financial ratios (>30% debt/cash) or failed core business screening."
-            elif "doubtful" in lower_body:
-                status = "DOUBTFUL"
-                details = "Flagged as doubtful or borderline under AAOIFI screening."
-            elif "sign in" in lower_body and "unlock" in lower_body:
-                status = "SESSION EXPIRED"
-                details = "Musaffa cookies expired. Refresh MUSAFFA_STATE_JSON in Render."
+            for direct_url in candidates:
+                logger.info(f"Checking URL: {direct_url}")
+                response = await page.goto(direct_url, wait_until="domcontentloaded", timeout=25000)
+                await page.wait_for_timeout(3000)
+
+                body_text = await page.inner_text("body")
+                lower_body = body_text.lower()
+
+                # If the page 404s or shows "Stock not found", try next candidate
+                if "page not found" in lower_body or "not found" in lower_body and "halal" not in lower_body:
+                    continue
+
+                if "classified as halal" in lower_body or "is halal" in lower_body:
+                    status = "HALAL"
+                    details = "Passed Shariah business activities and AAOIFI financial ratio screens."
+                    break
+                elif "classified as not halal" in lower_body or "not shariah-compliant" in lower_body:
+                    status = "NOT HALAL"
+                    details = "Breached financial ratios (>30% debt/cash) or failed core business screening."
+                    break
+                elif "doubtful" in lower_body:
+                    status = "DOUBTFUL"
+                    details = "Flagged as doubtful or borderline under AAOIFI screening."
+                    break
+                elif "sign in" in lower_body and "unlock" in lower_body:
+                    status = "SESSION EXPIRED"
+                    details = "Guest limit reached; update MUSAFFA_STATE_JSON in Render."
+                    break
 
             await browser.close()
             return {"ticker": clean_ticker, "status": status, "details": details}
@@ -130,7 +142,6 @@ async def fetch_musaffa_compliance(ticker: str) -> dict:
             logger.error(f"Error scraping {clean_ticker}: {str(e)}")
             await browser.close()
             return {"ticker": clean_ticker, "status": "ERROR", "details": str(e)}
-
 # ----------------- TELEGRAM BOT HANDLERS -----------------
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
