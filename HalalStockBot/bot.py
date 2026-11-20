@@ -10,6 +10,9 @@ from telegram.ext import (
     filters,
 )
 from playwright.async_api import async_playwright
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 # ----------------- CONFIGURATION -----------------
 TELEGRAM_BOT_TOKEN = "9022810062:AAG0W8fmOiUz3hA8pO1ApyNpsmjrsVtoIuE"
@@ -174,6 +177,25 @@ async def audit_portfolio_command(update: Update, context: ContextTypes.DEFAULT_
     )
     await status_msg.edit_text(summary_text, parse_mode="Markdown")
 
+# ----------------- DUMMY SERVER FOR RENDER -----------------
+class RenderHealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is healthy and polling Telegram!")
+
+    # Silence console log spam for health check pings
+    def log_message(self, format, *args):
+        return
+
+def run_dummy_server():
+    # Render automatically injects the PORT environment variable
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), RenderHealthHandler)
+    print(f"✅ Render dummy health server bound to 0.0.0.0:{port}")
+    server.serve_forever()
+
 
 # ----------------- MAIN INITIALIZATION -----------------
 
@@ -189,16 +211,23 @@ if STATE_JSON_RAW and not os.path.exists(STATE_FILE):
         print(f"⚠️ WARNING: '{STATE_FILE}' not found in current directory.")
         print("Run the conversion script to create it before screening.")
 
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    server_thread = threading.Thread(target=run_dummy_server, daemon=True)
+    server_thread.start()
+
+    # 2. Initialize and run your Telegram bot polling on the main thread
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        raise ValueError("Missing TELEGRAM_BOT_TOKEN environment variable.")
+
+    app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("check", check_command))
-    app.add_handler(CommandHandler("audit", audit_portfolio_command))
+    app.add_handler(CommandHandler("audit", audit_command))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), plain_text_handler))
 
     print("🤖 Telegram Bot initialized and polling...")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
