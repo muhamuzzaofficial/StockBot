@@ -1,6 +1,8 @@
 import os
 import json
 import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -10,13 +12,17 @@ from telegram.ext import (
     filters,
 )
 from playwright.async_api import async_playwright
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 # ----------------- CONFIGURATION -----------------
-TELEGRAM_BOT_TOKEN = "9022810062:AAGbTaG5G9KHMy6svkxOU0FBOSzpymo-UF0"
+# Reads from Render Environment Variable first, falls back to token if unset
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "9022810062:AAGbTaG5G9KHMy6svkxOU0FBOSzpymo-UF0")
 STATE_FILE = "musaffa_state.json"
+STATE_JSON_RAW = os.getenv("MUSAFFA_STATE_JSON")
+
+# Automatically generate musaffa_state.json if provided via Render Environment
+if STATE_JSON_RAW and not os.path.exists(STATE_FILE):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        f.write(STATE_JSON_RAW)
 
 # Default watchlist (NSE tickers)
 MY_PORTFOLIO = [
@@ -38,23 +44,28 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ----------------- PLAYWRIGHT SCRAPING ENGINE -----------------
+
 async def fetch_musaffa_compliance(ticker: str) -> dict:
     clean_ticker = ticker.strip().upper().replace(".NS", "").replace(".BO", "")
-    
-    # Musaffa's direct stock profile URL for Indian NSE equities
     direct_url = f"https://musaffa.com/stock/{clean_ticker}.NS/"
 
     if not os.path.exists(STATE_FILE):
         return {
             "ticker": clean_ticker,
             "status": "CONFIG ERROR",
-            "details": f"Missing `{STATE_FILE}`.",
+            "details": f"Missing `{STATE_FILE}`. Add MUSAFFA_STATE_JSON in Render environment.",
         }
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--single-process",
+            ],
         )
 
         try:
@@ -70,31 +81,27 @@ async def fetch_musaffa_compliance(ticker: str) -> dict:
             page = await context.new_page()
 
             logger.info(f"Checking direct URL: {direct_url}")
-            response = await page.goto(direct_url, wait_until="domcontentloaded", timeout=25000)
-
-            # Wait briefly for dynamic client components to load
+            await page.goto(direct_url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(3500)
 
-            # Target the specific Shariah compliance section/header instead of entire page
-            # Musaffa renders: "is classified as HALAL by Musaffa" or "classified as NOT HALAL"
             body_text = await page.inner_text("body")
+            lower_body = body_text.lower()
 
             status = "UNKNOWN"
             details = "Could not parse compliance verdict."
 
-            # Check primary statement first
-            if "classified as halal" in body_text.lower() or "is halal" in body_text.lower():
+            if "classified as halal" in lower_body or "is halal" in lower_body:
                 status = "HALAL"
                 details = "Passed Shariah business activities and AAOIFI financial ratio screens."
-            elif "classified as not halal" in body_text.lower() or "not shariah-compliant" in body_text.lower():
+            elif "classified as not halal" in lower_body or "not shariah-compliant" in lower_body:
                 status = "NOT HALAL"
                 details = "Breached financial ratios (>30% debt/cash) or failed core business screening."
-            elif "doubtful" in body_text.lower():
+            elif "doubtful" in lower_body:
                 status = "DOUBTFUL"
                 details = "Flagged as doubtful or borderline under AAOIFI screening."
-            elif "sign in" in body_text.lower() and "unlock" in body_text.lower():
+            elif "sign in" in lower_body and "unlock" in lower_body:
                 status = "SESSION EXPIRED"
-                details = "Guest limit reached; update musaffa_state.json with active cookies."
+                details = "Musaffa cookies expired. Refresh MUSAFFA_STATE_JSON in Render."
 
             await browser.close()
             return {"ticker": clean_ticker, "status": status, "details": details}
@@ -103,14 +110,16 @@ async def fetch_musaffa_compliance(ticker: str) -> dict:
             logger.error(f"Error scraping {clean_ticker}: {str(e)}")
             await browser.close()
             return {"ticker": clean_ticker, "status": "ERROR", "details": str(e)}
-# ----------------- TELEGRAM HANDLERS -----------------
+
+
+# ----------------- TELEGRAM BOT HANDLERS -----------------
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "📊 *Musaffa Shariah Screener Bot*\n\n"
         "Commands:\n"
         "• `/check <TICKER>` - Screen an Indian stock (e.g. `/check TCS`)\n"
-        "• `/audit` - Screen all portfolio stocks\n"
+        "• `/audit` - Screen all portfolio holdings\n"
         "• Or send any ticker symbol directly into this chat."
     )
     await update.message.reply_text(welcome_text, parse_mode="Markdown")
@@ -157,7 +166,7 @@ async def execute_screening(update: Update, ticker: str):
     await msg.edit_text(response, parse_mode="Markdown")
 
 
-async def audit_portfolio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def audit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text(
         f"⏳ Auditing your {len(MY_PORTFOLIO)} stocks on Musaffa...\n"
         "This will take roughly 30–45 seconds.",
@@ -177,7 +186,9 @@ async def audit_portfolio_command(update: Update, context: ContextTypes.DEFAULT_
     )
     await status_msg.edit_text(summary_text, parse_mode="Markdown")
 
+
 # ----------------- DUMMY SERVER FOR RENDER -----------------
+
 class RenderHealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -185,49 +196,39 @@ class RenderHealthHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot is healthy and polling Telegram!")
 
-    # Silence console log spam for health check pings
     def log_message(self, format, *args):
-        return
+        return  # Suppress health check spam in logs
+
 
 def run_dummy_server():
-    # Render automatically injects the PORT environment variable
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), RenderHealthHandler)
-    print(f"✅ Render dummy health server bound to 0.0.0.0:{port}")
+    logger.info(f"✅ Render dummy health server bound to 0.0.0.0:{port}")
     server.serve_forever()
 
 
 # ----------------- MAIN INITIALIZATION -----------------
 
 def main():
-    STATE_FILE = "musaffa_state.json"
-STATE_JSON_RAW = os.getenv("MUSAFFA_STATE_JSON")
-
-# If the environment variable exists, dump it to musaffa_state.json
-if STATE_JSON_RAW and not os.path.exists(STATE_FILE):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        f.write(STATE_JSON_RAW)
-    if not os.path.exists(STATE_FILE):
-        print(f"⚠️ WARNING: '{STATE_FILE}' not found in current directory.")
-        print("Run the conversion script to create it before screening.")
-
+    # 1. Start Render HTTP port binding server on a background daemon thread
     server_thread = threading.Thread(target=run_dummy_server, daemon=True)
     server_thread.start()
 
-    # 2. Initialize and run your Telegram bot polling on the main thread
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        raise ValueError("Missing TELEGRAM_BOT_TOKEN environment variable.")
+    # 2. Check if state file exists
+    if not os.path.exists(STATE_FILE):
+        logger.warning(f"⚠️ '{STATE_FILE}' not found. Make sure MUSAFFA_STATE_JSON is set in Render.")
 
-    app = ApplicationBuilder().token(token).build()
+    # 3. Initialize Telegram application
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("check", check_command))
     app.add_handler(CommandHandler("audit", audit_command))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), plain_text_handler))
 
-    print("🤖 Telegram Bot initialized and polling...")
+    logger.info("🤖 Telegram Bot initialized and polling...")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
