@@ -15,7 +15,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 # ----------------- CONFIGURATION -----------------
-TELEGRAM_BOT_TOKEN = "9022810062:AAG0W8fmOiUz3hA8pO1ApyNpsmjrsVtoIuE"
+TELEGRAM_BOT_TOKEN = "9022810062:AAGbTaG5G9KHMy6svkxOU0FBOSzpymo-UF0"
 STATE_FILE = "musaffa_state.json"
 
 # Default watchlist (NSE tickers)
