@@ -35,6 +35,15 @@ MY_PORTFOLIO = [
     "TATACONSUM",
     "TMCV",
     "TRENT",
+    "ULTRACEMCO",
+    "POLYCAB",
+    "TATAELXSI",
+    "CUMMINSIND",
+    "SUPREMEIND",
+    "HINDUNILVR",
+    "DEEPAKNTR",
+    "CIPLA",
+    "MARICO",
 ]
 
 logging.basicConfig(
