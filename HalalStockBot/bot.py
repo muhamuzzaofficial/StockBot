@@ -46,6 +46,8 @@ logger = logging.getLogger(__name__)
 
 # ----------------- PLAYWRIGHT SCRAPING ENGINE -----------------
 
+# ----------------- LOW-MEMORY PLAYWRIGHT ENGINE -----------------
+
 async def fetch_musaffa_compliance(ticker: str) -> dict:
     clean_ticker = ticker.strip().upper().replace(".NS", "").replace(".BO", "")
     direct_url = f"https://musaffa.com/stock/{clean_ticker}.NS/"
@@ -58,13 +60,22 @@ async def fetch_musaffa_compliance(ticker: str) -> dict:
         }
 
     async with async_playwright() as p:
+        # Aggressive memory-saving flags to fit strictly under Render's 512 MB ceiling
         browser = await p.chromium.launch(
             headless=True,
             args=[
                 "--no-sandbox",
+                "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
+                "--no-zygote",
                 "--single-process",
+                "--disable-accelerated-2d-canvas",
+                "--no-first-run",
+                "--mute-audio",
+                "--disable-background-networking",
+                "--disable-default-apps",
+                "--disable-sync",
             ],
         )
 
@@ -76,12 +87,21 @@ async def fetch_musaffa_compliance(ticker: str) -> dict:
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
                     "Chrome/124.0.0.0 Safari/537.36"
                 ),
-                viewport={"width": 1280, "height": 800},
+                viewport={"width": 1024, "height": 600},
             )
             page = await context.new_page()
 
+            # Abort heavy assets (images, fonts, stylesheets, media) to keep memory near ~180 MB
+            async def block_heavy_assets(route):
+                if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            await page.route("**/*", block_heavy_assets)
+
             logger.info(f"Checking direct URL: {direct_url}")
-            await page.goto(direct_url, wait_until="domcontentloaded", timeout=30000)
+            await page.goto(direct_url, wait_until="domcontentloaded", timeout=25000)
             await page.wait_for_timeout(3500)
 
             body_text = await page.inner_text("body")
@@ -110,7 +130,6 @@ async def fetch_musaffa_compliance(ticker: str) -> dict:
             logger.error(f"Error scraping {clean_ticker}: {str(e)}")
             await browser.close()
             return {"ticker": clean_ticker, "status": "ERROR", "details": str(e)}
-
 
 # ----------------- TELEGRAM BOT HANDLERS -----------------
 
