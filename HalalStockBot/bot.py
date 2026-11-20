@@ -178,6 +178,13 @@ async def audit_portfolio_command(update: Update, context: ContextTypes.DEFAULT_
 # ----------------- MAIN INITIALIZATION -----------------
 
 def main():
+    STATE_FILE = "musaffa_state.json"
+STATE_JSON_RAW = os.getenv("MUSAFFA_STATE_JSON")
+
+# If the environment variable exists, dump it to musaffa_state.json
+if STATE_JSON_RAW and not os.path.exists(STATE_FILE):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        f.write(STATE_JSON_RAW)
     if not os.path.exists(STATE_FILE):
         print(f"⚠️ WARNING: '{STATE_FILE}' not found in current directory.")
         print("Run the conversion script to create it before screening.")
