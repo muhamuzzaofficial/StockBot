@@ -1,0 +1,28 @@
+[
+    {
+        "domain": ".musaffa.com",
+        "expirationDate": 1797758959.989787,
+        "hostOnly": false,
+        "httpOnly": false,
+        "name": "featurebase-access-67417a4dcf8f1febf04f2191",
+        "path": "/",
+        "sameSite": "lax",
+        "secure": true,
+        "session": false,
+        "storeId": null,
+        "value": "eyJhbGciOiJFZERTQSIsImtpZCI6InByb2QtYjMyOTM2NzEtMDE2ZS00YTJkLWI5YTktOGVjYmIwNGZhMmFlIiwidHlwIjoiSldUIn0.eyJzdWIiOiI2YjAwMTJlZDdmMWY1MTVjNTFkZjc4NDIiLCJ1dCI6ImN1c3RvbWVyIiwiaWF0IjoxNzk1MTY2OTU5LCJleHAiOjE3OTc3NTg5NTksIm5iZiI6MTc5NTE2NjgzOSwiaXNzIjoicHJvZHVjdGlvbjpiYWNrZW5kIiwiYXVkIjoic2VzcyIsInR0IjoiYWNjZXNzIiwidHYiOjAsIm9pZCI6IjY3NDE3YTRkY2Y4ZjFmZWJmMDRmMjE5MSIsInNyYyI6InNzbyJ9.qbPiKMG4mE8w1C3RH5udWawks7I36mCnvl3c6nr2SJYZ-5vDoFiTlMUjO7DQao6lLxlrHMQBlQERtatQFwsxAw"
+    },
+    {
+        "domain": ".musaffa.com",
+        "expirationDate": 1826702953,
+        "hostOnly": false,
+        "httpOnly": false,
+        "name": "_zitok",
+        "path": "/",
+        "sameSite": "strict",
+        "secure": true,
+        "session": false,
+        "storeId": null,
+        "value": "bcb2a387082d46eb9cc21790431281"
+    }
+]
